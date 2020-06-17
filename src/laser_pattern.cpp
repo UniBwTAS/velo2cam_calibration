@@ -61,7 +61,7 @@
 using namespace std;
 using namespace sensor_msgs;
 
-ros::Publisher cumulative_pub, centers_pub, pattern_pub, range_pub,
+ros::Publisher cumulative_pub, center_pc_pub, centers_pub, pattern_pub, range_pub,
                coeff_pub, aux_pub, auxpoint_pub, debug_pub;
 int nFrames; // Used for resetting center computation
 pcl::PointCloud<pcl::PointXYZ>::Ptr cumulative_cloud;
@@ -413,6 +413,7 @@ void callback(const PointCloud2::ConstPtr& laser_cloud){
     sensor_msgs::PointCloud2 ros2_pointcloud;
     pcl::toROSMsg(*centers_cloud, ros2_pointcloud);
     ros2_pointcloud.header = laser_cloud->header;
+    center_pc_pub.publish(ros2_pointcloud);
 
     velo2cam_calibration::ClusterCentroids to_send;
     to_send.header = laser_cloud->header;
@@ -453,6 +454,7 @@ int main(int argc, char **argv){
   pattern_pub = nh_.advertise<PointCloud2> ("pattern_circles", 1);
   auxpoint_pub = nh_.advertise<PointCloud2> ("rotated_pattern", 1);
   cumulative_pub = nh_.advertise<PointCloud2> ("cumulative_cloud", 1);
+  center_pc_pub = nh_.advertise<PointCloud2> ("center_pc", 1);
   centers_pub = nh_.advertise<velo2cam_calibration::ClusterCentroids> ("centers_cloud", 1);
 
   debug_pub = nh_.advertise<PointCloud2> ("debug", 1);
