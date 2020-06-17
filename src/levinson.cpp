@@ -111,7 +111,7 @@ COLOUR GetColour(double v,double vmin,double vmax)
 }
 
 void edges_pointcloud(pcl::PointCloud<Velodyne::Point>::Ptr pc){
-  std::vector<std::vector<Velodyne::Point*> > rings = Velodyne::getRings(*pc);
+  std::vector<std::vector<Velodyne::Point*> > rings = Velodyne::getRings(*pc, 16);
   for (std::vector<std::vector<Velodyne::Point*> >::iterator ring = rings.begin(); ring < rings.end(); ++ring){
     if (ring->empty()) continue;
 

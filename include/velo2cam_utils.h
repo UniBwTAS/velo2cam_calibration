@@ -37,8 +37,6 @@
 
 using namespace std;
 
-static const int RINGS_COUNT = 16; // TODO AS FUNCTION PARAM
-
 namespace Velodyne {
   struct Point
   {
@@ -56,9 +54,9 @@ namespace Velodyne {
     }
   }
 
-  vector<vector<Point*> > getRings(pcl::PointCloud<Velodyne::Point> & pc)
+  vector<vector<Point*> > getRings(pcl::PointCloud<Velodyne::Point> & pc, int rings_count)
   {
-    vector<vector<Point*> > rings(RINGS_COUNT);
+    vector<vector<Point*> > rings(rings_count);
     for (pcl::PointCloud<Point>::iterator pt = pc.points.begin(); pt < pc.points.end(); pt++)
     {
       rings[pt->ring].push_back(&(*pt));
