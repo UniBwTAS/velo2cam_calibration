@@ -158,9 +158,8 @@ void callback(const PointCloud2::ConstPtr& laser_cloud){
   }
 
   pcl::PointCloud<Velodyne::Point>::Ptr edges_cloud(new pcl::PointCloud<Velodyne::Point>);
-  float THRESHOLD = 0.5 ;
   for (pcl::PointCloud<Velodyne::Point>::iterator pt = velocloud->points.begin(); pt < velocloud->points.end(); ++pt){
-    if(pt->intensity>THRESHOLD){
+    if(pt->intensity>threshold_){
       edges_cloud->push_back(*pt);
     }
   }
@@ -461,6 +460,8 @@ void param_callback(velo2cam_calibration::LaserConfig &config, uint32_t level){
   ROS_INFO("New normal axis for plane segmentation: %f, %f, %f", axis_[0], axis_[1], axis_[2]);
   angle_threshold_ = config.angle_threshold;
   ROS_INFO("New angle threshold: %f", angle_threshold_);
+  threshold_ = config.edge_threshold;
+  ROS_INFO("New edge threshold: %f", threshold_);
   centroid_distance_min_ = config.centroid_distance_min;
   ROS_INFO("New minimum distance between centroids: %f", centroid_distance_min_);
   centroid_distance_max_ = config.centroid_distance_max;
