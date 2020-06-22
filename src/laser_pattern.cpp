@@ -423,6 +423,7 @@ void callback(const PointCloud2::ConstPtr& laser_cloud){
   // Create cloud for publishing centers
   pcl::PointCloud<pcl::PointXYZ>::Ptr centers_cloud(new pcl::PointCloud<pcl::PointXYZ>);
 
+
   // Compute circles centers
   getCenterClusters(cumulative_cloud, centers_cloud, cluster_size_, nFrames/2, nFrames);
   if (centers_cloud->points.size()>4){
@@ -466,6 +467,13 @@ void param_callback(velo2cam_calibration::LaserConfig &config, uint32_t level){
   ROS_INFO("New minimum distance between centroids: %f", centroid_distance_min_);
   centroid_distance_max_ = config.centroid_distance_max;
   ROS_INFO("New maximum distance between centroids: %f", centroid_distance_max_);
+
+  if(config.reset) {
+    nFrames = 0;
+    cumulative_cloud->clear();
+    config.reset = false;
+    ROS_WARN("Reset cumulative cloud cloud");
+  }
 }
 
 int main(int argc, char **argv){
