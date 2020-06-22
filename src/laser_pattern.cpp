@@ -77,6 +77,7 @@ double cluster_size_;
 int clouds_proc_ = 0, clouds_used_ = 0;
 int min_centers_found_;
 int rings_count_;
+bool accumulate_;
 
 void callback(const PointCloud2::ConstPtr& laser_cloud){
 
@@ -386,6 +387,11 @@ void callback(const PointCloud2::ConstPtr& laser_cloud){
     if(DEBUG) ROS_INFO("Remaining points in cloud %lu", copy_cloud->points.size());
   }
 
+  if(!accumulate_) {
+    nFrames = 0;
+    cumulative_cloud->clear();
+  }
+
   if(found_centers.size() >= min_centers_found_ && found_centers.size() < 5){
     for (std::vector<std::vector<float> >::iterator it = found_centers.begin(); it < found_centers.end(); ++it){
       pcl::PointXYZ center;
@@ -467,6 +473,8 @@ void param_callback(velo2cam_calibration::LaserConfig &config, uint32_t level){
   ROS_INFO("New minimum distance between centroids: %f", centroid_distance_min_);
   centroid_distance_max_ = config.centroid_distance_max;
   ROS_INFO("New maximum distance between centroids: %f", centroid_distance_max_);
+  accumulate_ = config.accumulate;
+  ROS_INFO("New accumulation option: %f", accumulate_);
 
   if(config.reset) {
     nFrames = 0;
