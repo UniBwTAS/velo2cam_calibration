@@ -61,7 +61,8 @@
 using namespace std;
 using namespace sensor_msgs;
 
-ros::Publisher cumulative_pub, center_pc_pub, centers_pub, pattern_pub, range_pub,
+ros::Publisher plane_cloud_pub, edges_cloud_pub, pattern_cloud_pub,
+               cumulative_pub, center_pc_pub, centers_pub, pattern_pub, range_pub,
                coeff_pub, aux_pub, auxpoint_pub, debug_pub;
 int nFrames; // Used for resetting center computation
 pcl::PointCloud<pcl::PointXYZ>::Ptr cumulative_cloud;
@@ -124,6 +125,17 @@ void callback(const PointCloud2::ConstPtr& laser_cloud){
     return;
   }
 
+  pcl::PointCloud<Velodyne::Point>::Ptr plane_cloud(new pcl::PointCloud<Velodyne::Point>);
+  pcl::ExtractIndices<Velodyne::Point> extract_indices;
+  extract_indices.setInputCloud(velo_filtered);
+  extract_indices.setIndices(inliers);
+  extract_indices.setNegative(false);
+  extract_indices.filter(*plane_cloud);
+  sensor_msgs::PointCloud2 plane_cloud_ros;
+  pcl::toROSMsg(*plane_cloud, plane_cloud_ros);
+  plane_cloud_ros.header = laser_cloud->header;
+  plane_cloud_pub.publish(plane_cloud_ros);
+
   // Copy coefficients to proper object for further filtering
   Eigen::VectorXf coefficients_v(4);
   coefficients_v(0) = coefficients->values[0];
@@ -159,11 +171,21 @@ void callback(const PointCloud2::ConstPtr& laser_cloud){
     return;
   }
 
+  sensor_msgs::PointCloud2 edges_cloud_ros;
+  pcl::toROSMsg(*edges_cloud, edges_cloud_ros);
+  edges_cloud_ros.header = laser_cloud->header;
+  edges_cloud_pub.publish(edges_cloud_ros);
+
   // Get points belonging to plane in pattern pointcloud
   pcl::SampleConsensusModelPlane<Velodyne::Point>::Ptr dit (new pcl::SampleConsensusModelPlane<Velodyne::Point> (edges_cloud));
   std::vector<int> inliers2;
   dit -> selectWithinDistance (coefficients_v, .05, inliers2); // 0.1
   pcl::copyPointCloud<Velodyne::Point>(*edges_cloud, inliers2, *pattern_cloud);
+
+  sensor_msgs::PointCloud2 pattern_cloud_ros;
+  pcl::toROSMsg(*pattern_cloud, pattern_cloud_ros);
+  pattern_cloud_ros.header = laser_cloud->header;
+  pattern_cloud_pub.publish(pattern_cloud_ros);
 
   // Remove kps not belonging to circles by coords
   pcl::PointCloud<pcl::PointXYZ>::Ptr circles_cloud(new pcl::PointCloud<pcl::PointXYZ>);
@@ -451,6 +473,9 @@ int main(int argc, char **argv){
   ros::Subscriber sub = nh_.subscribe ("cloud1", 1, callback);
 
   range_pub = nh_.advertise<PointCloud2> ("range_filtered_velo", 1);
+  plane_cloud_pub = nh_.advertise<PointCloud2>("plane_cloud", 1);
+  edges_cloud_pub = nh_.advertise<PointCloud2>("edges_cloud", 1);
+  pattern_cloud_pub = nh_.advertise<PointCloud2>("pattern_cloud", 1);
   pattern_pub = nh_.advertise<PointCloud2> ("pattern_circles", 1);
   auxpoint_pub = nh_.advertise<PointCloud2> ("rotated_pattern", 1);
   cumulative_pub = nh_.advertise<PointCloud2> ("cumulative_cloud", 1);
