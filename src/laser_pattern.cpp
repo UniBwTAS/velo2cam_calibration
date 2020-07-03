@@ -68,7 +68,7 @@ int nFrames; // Used for resetting center computation
 pcl::PointCloud<pcl::PointXYZ>::Ptr cumulative_cloud;
 
 // Dynamic parameters
-double threshold_;
+double threshold_, max_plane_distance_;
 double passthrough_radius_min_, passthrough_radius_max_, circle_radius_,
        centroid_distance_min_, centroid_distance_max_;
 Eigen::Vector3f axis_;
@@ -179,7 +179,7 @@ void callback(const PointCloud2::ConstPtr& laser_cloud){
   // Get points belonging to plane in pattern pointcloud
   pcl::SampleConsensusModelPlane<Velodyne::Point>::Ptr dit (new pcl::SampleConsensusModelPlane<Velodyne::Point> (edges_cloud));
   std::vector<int> inliers2;
-  dit -> selectWithinDistance (coefficients_v, .05, inliers2); // 0.1
+  dit -> selectWithinDistance (coefficients_v, max_plane_distance_, inliers2); // 0.1
   pcl::copyPointCloud<Velodyne::Point>(*edges_cloud, inliers2, *pattern_cloud);
 
   sensor_msgs::PointCloud2 pattern_cloud_ros;
@@ -469,6 +469,8 @@ void param_callback(velo2cam_calibration::LaserConfig &config, uint32_t level){
   ROS_INFO("New angle threshold: %f", angle_threshold_);
   threshold_ = config.edge_threshold;
   ROS_INFO("New edge threshold: %f", threshold_);
+  max_plane_distance_ = config.max_plane_distance;
+  ROS_INFO("New max plane distance: %f", max_plane_distance_);
   centroid_distance_min_ = config.centroid_distance_min;
   ROS_INFO("New minimum distance between centroids: %f", centroid_distance_min_);
   centroid_distance_max_ = config.centroid_distance_max;
