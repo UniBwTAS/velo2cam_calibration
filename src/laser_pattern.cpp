@@ -69,6 +69,7 @@ using namespace sensor_msgs;
 
 double horizontal_distance = 0.30, vertical_distance = 0.30, diagonal = 0.4242;
 double pperimeter = 2 * horizontal_distance + 2 * vertical_distance;
+double board_width = 1.20;
 
 class Square
 {
@@ -234,8 +235,8 @@ void comb(int N, int K, std::vector<std::vector<int>>& groups)
     assert(groups.size() == n_permutations);
 }
 
-ros::Publisher cumulative_pub, center_pc_pub, centers_pub, pattern_pub, range_pub, coeff_pub, aux_pub, auxpoint_pub,
-    debug_pub;
+ros::Publisher plane_cloud_pub, cumulative_pub, center_pc_pub, centers_pub, pattern_pub, range_pub, coeff_pub, aux_pub,
+    auxpoint_pub, debug_pub;
 int nFrames; // Used for resetting center computation
 pcl::PointCloud<pcl::PointXYZ>::Ptr cumulative_cloud;
 
@@ -282,20 +283,109 @@ void callback(const PointCloud2::ConstPtr& laser_cloud)
 
     pcl::SACSegmentation<Velodyne::Point> plane_segmentation;
     plane_segmentation.setModelType(pcl::SACMODEL_PARALLEL_PLANE);
-    plane_segmentation.setDistanceThreshold(max_plane_distance_);
+    plane_segmentation.setDistanceThreshold(0.1);
     plane_segmentation.setMethodType(pcl::SAC_RANSAC);
     plane_segmentation.setAxis(Eigen::Vector3f(axis_[0], axis_[1], axis_[2]));
     plane_segmentation.setEpsAngle(angle_threshold_);
     plane_segmentation.setOptimizeCoefficients(true);
     plane_segmentation.setMaxIterations(1000);
-    plane_segmentation.setInputCloud(velo_filtered);
-    plane_segmentation.segment(*inliers, *coefficients);
 
-    if (inliers->indices.size() == 0)
+    pcl::ExtractIndices<Velodyne::Point> plane_extract;
+
+    pcl::PointCloud<Velodyne::Point>::Ptr plane_cloud(new pcl::PointCloud<Velodyne::Point>);
+    bool valid = false;
+
+    pcl::PointCloud<Velodyne::Point>::Ptr tmp_cloud(new pcl::PointCloud<Velodyne::Point>);
+
+    int min_num_points_per_ring = 5;
+    int min_num_rings = 10;
+    Eigen::Vector3d normal_axis = Eigen::Vector3d::UnitX();
+
+    while (velo_filtered->size() > min_num_points_per_ring * min_num_rings)
     {
-        ROS_WARN("[Laser] Could not estimate a planar model for the given dataset.");
+        plane_segmentation.setInputCloud(velo_filtered);
+        plane_segmentation.segment(*inliers, *coefficients);
+
+        valid = true;
+
+        if (inliers->indices.size() < min_num_points_per_ring * min_num_rings)
+        {
+            valid = false;
+            break;
+        }
+
+        ROS_INFO_STREAM("Segmented plane with " << inliers->indices.size() << " inliers.");
+
+        // Get inliers
+        plane_extract.setInputCloud(velo_filtered);
+        plane_extract.setIndices(inliers);
+        plane_extract.setNegative(false);
+        plane_extract.filter(*tmp_cloud);
+
+        // Get rings with correct width
+        vector<vector<Velodyne::Point*>> rings = Velodyne::getRings(*tmp_cloud, rings_count_);
+        int num_rings = 0;
+        for (vector<vector<Velodyne::Point*>>::iterator ring = rings.begin(); ring < rings.end(); ++ring)
+        {
+            if (ring->size() < min_num_points_per_ring)
+                continue;
+
+            if (fabs(pcl::euclideanDistance(*(*(ring->begin())), *(*(ring->end() - 1))) - board_width) > 0.5)
+                continue;
+
+            for (vector<Velodyne::Point*>::iterator pt = ring->begin() + 1; pt < ring->end() - 1; pt++)
+            {
+                plane_cloud->push_back(*(*pt));
+            }
+
+            num_rings++;
+        }
+
+        // Check number of rings
+        ROS_INFO_STREAM("Plane consists of " << num_rings << " rings.");
+        if (num_rings < min_num_rings)
+        {
+            ROS_WARN_STREAM("Too few rings.");
+            valid = false;
+        }
+
+        // Check normal angle
+        Eigen::Vector3d plane_normal(coefficients->values[0], coefficients->values[1], coefficients->values[2]);
+        double angle = std::atan2(plane_normal.cross(normal_axis).norm(), plane_normal.dot(normal_axis));
+        ROS_INFO_STREAM("Angle difference between plane normal and desired normal: " << angle);
+        if (angle > M_PI / 4.0)
+        {
+            ROS_WARN_STREAM("Angle does not fit.");
+            valid = false;
+        }
+
+        if (valid)
+        {
+            break;
+        }
+        else
+        {
+            plane_cloud->clear();
+
+            // Remove inliers
+            plane_extract.setInputCloud(velo_filtered);
+            plane_extract.setIndices(inliers);
+            plane_extract.setNegative(true);
+            plane_extract.filter(*tmp_cloud);
+            velo_filtered->swap(*tmp_cloud);
+        }
+    }
+
+    if (!valid)
+    {
+        ROS_ERROR_STREAM("Could not estimate plane");
         return;
     }
+
+    sensor_msgs::PointCloud2 plane_cloud_ros;
+    pcl::toROSMsg(*plane_cloud, plane_cloud_ros);
+    plane_cloud_ros.header = laser_cloud->header;
+    plane_cloud_pub.publish(plane_cloud_ros);
 
     // Copy coefficients to proper object for further filtering
     Eigen::VectorXf coefficients_v(4);
@@ -611,10 +701,6 @@ void param_callback(velo2cam_calibration::LaserConfig& config, uint32_t level)
     ROS_INFO("New edge threshold: %f", threshold_);
     max_plane_distance_ = config.max_plane_distance;
     ROS_INFO("New max plane distance: %f", max_plane_distance_);
-    centroid_distance_min_ = config.centroid_distance_min;
-    ROS_INFO("New minimum distance between centroids: %f", centroid_distance_min_);
-    centroid_distance_max_ = config.centroid_distance_max;
-    ROS_INFO("New maximum distance between centroids: %f", centroid_distance_max_);
     accumulate_ = config.accumulate;
     ROS_INFO("New accumulation option: %f", accumulate_);
 
@@ -635,6 +721,7 @@ int main(int argc, char** argv)
     pcl::console::setVerbosityLevel(pcl::console::L_ALWAYS);
 
     range_pub = nh_.advertise<PointCloud2>("range_filtered_velo", 1);
+    plane_cloud_pub = nh_.advertise<PointCloud2>("plane_cloud", 1);
     pattern_pub = nh_.advertise<PointCloud2>("pattern_circles", 1);
     auxpoint_pub = nh_.advertise<PointCloud2>("rotated_pattern", 1);
     cumulative_pub = nh_.advertise<PointCloud2>("cumulative_cloud", 1);
