@@ -23,7 +23,6 @@
 */
 
 #define PCL_NO_PRECOMPILE
-#define TARGET_NUM_CIRCLES 4
 #define DEBUG 1
 
 #include <dynamic_reconfigure/server.h>
@@ -67,9 +66,7 @@
 using namespace std;
 using namespace sensor_msgs;
 
-double horizontal_distance = 0.30, vertical_distance = 0.30, diagonal = 0.4242;
-double pperimeter = 2 * horizontal_distance + 2 * vertical_distance;
-double board_width = 1.20;
+double circles_horizontal_distance_, circles_vertical_distance_, circles_diagonal_, circles_perimeter_, board_width_;
 
 class Square
 {
@@ -122,7 +119,7 @@ class Square
     }
 
     float perimeter()
-    { // TODO FIX It is assumed that _candidates are ordered, it shouldn't
+    {
         float perimeter = 0;
         for (int i = 0; i < 4; ++i)
         {
@@ -143,33 +140,37 @@ class Square
         for (int i = 0; i < _candidates.size(); ++i)
         {
             float d = distance(_center, _candidates[i]);
-            if (fabs(d - diagonal / 2.) > 0.05)
+            if (fabs(d - circles_diagonal_ / 2.) > 0.05)
             {
                 return false;
             }
         }
 
-        ROS_WARN_STREAM("top_left: " << _top_left << ", top_right: " << _top_right << ", bot_left: " << _bot_left
-                                     << ", bot_right: " << _bot_right);
+        if (DEBUG)
+            ROS_INFO_STREAM("[Laser] top_left: " << _top_left << ", top_right: " << _top_right << ", bot_left: " << _bot_left
+                                         << ", bot_right: " << _bot_right);
 
         // Check perimeter?
-        if (fabs(perimeter() - pperimeter) > 0.5)
+        if (fabs(perimeter() - circles_perimeter_) > 0.5)
         {
-            ROS_WARN_STREAM("Perimeter does not fit: " << perimeter());
+            if (DEBUG)
+                ROS_INFO_STREAM("[Laser] Perimeter does not fit: " << perimeter());
             return false;
         }
 
         // Check width + height?
-        if (fabs(distance(_top_left, _top_right) - horizontal_distance) > 0.1 ||
-            fabs(distance(_bot_left, _bot_right) - horizontal_distance) > 0.1)
+        if (fabs(distance(_top_left, _top_right) - circles_horizontal_distance_) > 0.1 ||
+            fabs(distance(_bot_left, _bot_right) - circles_horizontal_distance_) > 0.1)
         {
-            ROS_WARN_STREAM("Width does not fit");
+            if (DEBUG)
+                ROS_INFO_STREAM("[Laser] Width does not fit");
             return false;
         }
-        if (fabs(distance(_top_left, _bot_left) - vertical_distance) > 0.1 ||
-            fabs(distance(_top_right, _bot_right) - vertical_distance) > 0.1)
+        if (fabs(distance(_top_left, _bot_left) - circles_vertical_distance_) > 0.1 ||
+            fabs(distance(_top_right, _bot_right) - circles_vertical_distance_) > 0.1)
         {
-            ROS_WARN_STREAM("Height does not fit");
+            if (DEBUG)
+                ROS_INFO_STREAM("[Laser] Height does not fit");
             return false;
         }
 
@@ -241,11 +242,12 @@ int nFrames; // Used for resetting center computation
 pcl::PointCloud<pcl::PointXYZ>::Ptr cumulative_cloud;
 
 // Dynamic parameters
-double threshold_, max_plane_distance_;
+double edge_threshold_, max_plane_distance_;
 double passthrough_radius_min_, passthrough_radius_max_, circle_radius_;
 int rings_count_;
-Eigen::Vector3f axis_;
-double angle_threshold_;
+Eigen::Vector3f plane_parallel_axis_, plane_normal_axis_;
+double plane_angle_threshold_to_parallel_, plane_angle_threshold_to_normal_;
+int min_num_points_per_ring_, min_num_rings_;
 double cluster_size_;
 int clouds_proc_ = 0, clouds_used_ = 0;
 int min_centers_found_;
@@ -285,8 +287,9 @@ void callback(const PointCloud2::ConstPtr& laser_cloud)
     plane_segmentation.setModelType(pcl::SACMODEL_PARALLEL_PLANE);
     plane_segmentation.setDistanceThreshold(0.1);
     plane_segmentation.setMethodType(pcl::SAC_RANSAC);
-    plane_segmentation.setAxis(Eigen::Vector3f(axis_[0], axis_[1], axis_[2]));
-    plane_segmentation.setEpsAngle(angle_threshold_);
+    plane_segmentation.setAxis(
+        Eigen::Vector3f(plane_parallel_axis_[0], plane_parallel_axis_[1], plane_parallel_axis_[2]));
+    plane_segmentation.setEpsAngle(plane_angle_threshold_to_parallel_);
     plane_segmentation.setOptimizeCoefficients(true);
     plane_segmentation.setMaxIterations(1000);
 
@@ -297,24 +300,21 @@ void callback(const PointCloud2::ConstPtr& laser_cloud)
 
     pcl::PointCloud<Velodyne::Point>::Ptr tmp_cloud(new pcl::PointCloud<Velodyne::Point>);
 
-    int min_num_points_per_ring = 5;
-    int min_num_rings = 10;
-    Eigen::Vector3d normal_axis = Eigen::Vector3d::UnitX();
-
-    while (velo_filtered->size() > min_num_points_per_ring * min_num_rings)
+    while (velo_filtered->size() > min_num_points_per_ring_ * min_num_rings_)
     {
         plane_segmentation.setInputCloud(velo_filtered);
         plane_segmentation.segment(*inliers, *coefficients);
 
         valid = true;
 
-        if (inliers->indices.size() < min_num_points_per_ring * min_num_rings)
+        if (inliers->indices.size() < min_num_points_per_ring_ * min_num_rings_)
         {
             valid = false;
             break;
         }
 
-        ROS_INFO_STREAM("Segmented plane with " << inliers->indices.size() << " inliers.");
+        if (DEBUG)
+            ROS_INFO_STREAM("[Laser] Segmented plane with " << inliers->indices.size() << " inliers.");
 
         // Get inliers
         plane_extract.setInputCloud(velo_filtered);
@@ -327,10 +327,10 @@ void callback(const PointCloud2::ConstPtr& laser_cloud)
         int num_rings = 0;
         for (vector<vector<Velodyne::Point*>>::iterator ring = rings.begin(); ring < rings.end(); ++ring)
         {
-            if (ring->size() < min_num_points_per_ring)
+            if (ring->size() < min_num_points_per_ring_)
                 continue;
 
-            if (fabs(pcl::euclideanDistance(*(*(ring->begin())), *(*(ring->end() - 1))) - board_width) > 0.5)
+            if (fabs(pcl::euclideanDistance(*(*(ring->begin())), *(*(ring->end() - 1))) - board_width_) > 0.5)
                 continue;
 
             for (vector<Velodyne::Point*>::iterator pt = ring->begin() + 1; pt < ring->end() - 1; pt++)
@@ -342,20 +342,24 @@ void callback(const PointCloud2::ConstPtr& laser_cloud)
         }
 
         // Check number of rings
-        ROS_INFO_STREAM("Plane consists of " << num_rings << " rings.");
-        if (num_rings < min_num_rings)
+        if (DEBUG)
+            ROS_INFO_STREAM("[Laser] Plane consists of " << num_rings << " rings.");
+        if (num_rings < min_num_rings_)
         {
-            ROS_WARN_STREAM("Too few rings.");
+            if (DEBUG)
+                ROS_WARN_STREAM("[Laser] Too few rings.");
             valid = false;
         }
 
         // Check normal angle
-        Eigen::Vector3d plane_normal(coefficients->values[0], coefficients->values[1], coefficients->values[2]);
-        double angle = std::atan2(plane_normal.cross(normal_axis).norm(), plane_normal.dot(normal_axis));
-        ROS_INFO_STREAM("Angle difference between plane normal and desired normal: " << angle);
-        if (angle > M_PI / 4.0)
+        Eigen::Vector3f plane_normal(coefficients->values[0], coefficients->values[1], coefficients->values[2]);
+        double angle = std::atan2(plane_normal.cross(plane_normal_axis_).norm(), plane_normal.dot(plane_normal_axis_));
+        if (DEBUG)
+            ROS_INFO_STREAM("[Laser] Angle difference between plane normal and desired normal: " << angle);
+        if (angle > plane_angle_threshold_to_normal_)
         {
-            ROS_WARN_STREAM("Angle does not fit.");
+            if (DEBUG)
+                ROS_WARN_STREAM("[Laser] Angle does not fit.");
             valid = false;
         }
 
@@ -378,7 +382,7 @@ void callback(const PointCloud2::ConstPtr& laser_cloud)
 
     if (!valid)
     {
-        ROS_ERROR_STREAM("Could not estimate plane");
+        ROS_ERROR_STREAM("[Laser] Could not estimate plane");
         return;
     }
 
@@ -415,7 +419,7 @@ void callback(const PointCloud2::ConstPtr& laser_cloud)
     pcl::PointCloud<Velodyne::Point>::Ptr edges_cloud(new pcl::PointCloud<Velodyne::Point>);
     for (pcl::PointCloud<Velodyne::Point>::iterator pt = velocloud->points.begin(); pt < velocloud->points.end(); ++pt)
     {
-        if (pt->intensity > threshold_)
+        if (pt->intensity > edge_threshold_)
         {
             edges_cloud->push_back(*pt);
         }
@@ -495,7 +499,7 @@ void callback(const PointCloud2::ConstPtr& laser_cloud)
     // Ransac settings for circle detection
     pcl::SACSegmentation<pcl::PointXYZ> circle_segmentation;
     circle_segmentation.setModelType(pcl::SACMODEL_CIRCLE2D);
-    circle_segmentation.setDistanceThreshold(0.04);
+    circle_segmentation.setDistanceThreshold(0.02);
     circle_segmentation.setMethodType(pcl::SAC_RANSAC);
     circle_segmentation.setOptimizeCoefficients(true);
     circle_segmentation.setMaxIterations(1000);
@@ -556,6 +560,9 @@ void callback(const PointCloud2::ConstPtr& laser_cloud)
     range_ros2.header = laser_cloud->header;
     debug_pub.publish(range_ros2);
 
+    if (DEBUG)
+        ROS_INFO("[Laser] Found %lu center candidates", centroid_candidates->size());
+
     if (centroid_candidates->size() < 4)
     {
         ROS_WARN("[Laser] Not enough centers: %ld", centroid_candidates->size());
@@ -574,7 +581,7 @@ void callback(const PointCloud2::ConstPtr& laser_cloud)
     if (centroid_candidates->size() >= 4)
     {
         std::vector<std::vector<int>> groups;
-        comb(centroid_candidates->size(), TARGET_NUM_CIRCLES, groups);
+        comb(centroid_candidates->size(), min_centers_found_, groups);
         double groups_scores[groups.size()]; // -1: invalid; 0-1 normalized score
         for (int i = 0; i < groups.size(); ++i)
         {
@@ -691,14 +698,30 @@ void param_callback(velo2cam_calibration::LaserConfig& config, uint32_t level)
     ROS_INFO("New passthrough_radius_max_ threshold: %f", passthrough_radius_max_);
     circle_radius_ = config.circle_radius;
     ROS_INFO("New pattern circle radius: %f", circle_radius_);
-    axis_[0] = config.x;
-    axis_[1] = config.y;
-    axis_[2] = config.z;
-    ROS_INFO("New normal axis for plane segmentation: %f, %f, %f", axis_[0], axis_[1], axis_[2]);
-    angle_threshold_ = config.angle_threshold;
-    ROS_INFO("New angle threshold: %f", angle_threshold_);
-    threshold_ = config.edge_threshold;
-    ROS_INFO("New edge threshold: %f", threshold_);
+    plane_parallel_axis_[0] = config.parallel_axis_x;
+    plane_parallel_axis_[1] = config.parallel_axis_y;
+    plane_parallel_axis_[2] = config.parallel_axis_z;
+    ROS_INFO("New parallel axis for plane segmentation: %f, %f, %f",
+             plane_parallel_axis_[0],
+             plane_parallel_axis_[1],
+             plane_parallel_axis_[2]);
+    plane_normal_axis_[0] = config.normal_x;
+    plane_normal_axis_[1] = config.normal_y;
+    plane_normal_axis_[2] = config.normal_z;
+    ROS_INFO("New normal axis for plane segmentation: %f, %f, %f",
+             plane_normal_axis_[0],
+             plane_normal_axis_[1],
+             plane_normal_axis_[2]);
+    plane_angle_threshold_to_parallel_ = config.angle_threshold_to_parallel;
+    ROS_INFO("New angle threshold to parallel: %f", plane_angle_threshold_to_parallel_);
+    plane_angle_threshold_to_normal_ = config.angle_threshold_to_normal;
+    ROS_INFO("New angle threshold to normal: %f", plane_angle_threshold_to_normal_);
+    min_num_points_per_ring_ = config.min_num_points_per_ring;
+    ROS_INFO("New minimum number of points per ring: %f", min_num_points_per_ring_);
+    min_num_rings_ = config.min_num_rings;
+    ROS_INFO("New minimum number of rings: %f", min_num_rings_);
+    edge_threshold_ = config.edge_threshold;
+    ROS_INFO("New edge threshold: %f", edge_threshold_);
     max_plane_distance_ = config.max_plane_distance;
     ROS_INFO("New max plane distance: %f", max_plane_distance_);
     accumulate_ = config.accumulate;
@@ -735,6 +758,11 @@ int main(int argc, char** argv)
     nh_.param("cluster_size", cluster_size_, 0.1);
     nh_.param("min_centers_found", min_centers_found_, 4);
     nh_.param("rings_count", rings_count_, 64);
+    nh_.param("circles_horizontal_distance", circles_horizontal_distance_, 0.3);
+    nh_.param("circles_vertical_distance", circles_vertical_distance_, 0.3);
+    nh_.param("circles_diagonal", circles_diagonal_, 0.4242);
+    circles_perimeter_ = 2 * circles_horizontal_distance_ + 2 * circles_vertical_distance_;
+    nh_.param("board_width", board_width_, 1.2);
 
     nFrames = 0;
     cumulative_cloud = pcl::PointCloud<pcl::PointXYZ>::Ptr(new pcl::PointCloud<pcl::PointXYZ>);
