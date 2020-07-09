@@ -399,7 +399,7 @@ void callback(const PointCloud2::ConstPtr& laser_cloud)
     coefficients_v(3) = coefficients->values[3];
 
     // Get edges points by range
-    vector<vector<Velodyne::Point*>> rings = Velodyne::getRings(*velocloud, rings_count_);
+    vector<vector<Velodyne::Point*>> rings = Velodyne::getRings(*plane_cloud, rings_count_);
     for (vector<vector<Velodyne::Point*>>::iterator ring = rings.begin(); ring < rings.end(); ++ring)
     {
         Velodyne::Point *prev, *succ;
@@ -412,12 +412,12 @@ void callback(const PointCloud2::ConstPtr& laser_cloud)
         {
             Velodyne::Point* prev = *(pt - 1);
             Velodyne::Point* succ = *(pt + 1);
-            (*pt)->intensity = max(max(prev->range - (*pt)->range, succ->range - (*pt)->range), 0.f);
+            (*pt)->intensity = max(pcl::euclideanDistance(*prev,*(*pt)),pcl::euclideanDistance(*(*pt),*succ));
         }
     }
 
     pcl::PointCloud<Velodyne::Point>::Ptr edges_cloud(new pcl::PointCloud<Velodyne::Point>);
-    for (pcl::PointCloud<Velodyne::Point>::iterator pt = velocloud->points.begin(); pt < velocloud->points.end(); ++pt)
+    for (pcl::PointCloud<Velodyne::Point>::iterator pt = plane_cloud->points.begin(); pt < plane_cloud->points.end(); ++pt)
     {
         if (pt->intensity > edge_threshold_)
         {
