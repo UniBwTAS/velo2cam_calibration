@@ -66,7 +66,7 @@
 using namespace std;
 using namespace sensor_msgs;
 
-double circles_horizontal_distance_, circles_vertical_distance_, circles_diagonal_, circles_perimeter_, board_width_;
+double circles_horizontal_distance_, circles_vertical_distance_, circles_diagonal_, circles_perimeter_, board_width_, board_height_;
 
 class Square
 {
@@ -236,17 +236,17 @@ void comb(int N, int K, std::vector<std::vector<int>>& groups)
     assert(groups.size() == n_permutations);
 }
 
-ros::Publisher plane_cloud_pub, cumulative_pub, center_pc_pub, centers_pub, pattern_pub, range_pub, coeff_pub, aux_pub,
+ros::Publisher plane_cloud_pub, cumulative_pub, center_pc_pub, centers_pub, pattern_pub, coeff_pub, aux_pub,
     auxpoint_pub, debug_pub;
 int nFrames; // Used for resetting center computation
 pcl::PointCloud<pcl::PointXYZ>::Ptr cumulative_cloud;
 
 // Dynamic parameters
 double edge_threshold_, max_plane_distance_;
-double passthrough_radius_min_, passthrough_radius_max_, circle_radius_;
+double circle_radius_;
 int rings_count_;
-Eigen::Vector3f plane_parallel_axis_, plane_normal_axis_;
-double plane_angle_threshold_to_parallel_, plane_angle_threshold_to_normal_;
+Eigen::Vector3f plane_normal_axis_;
+double plane_max_angle_to_upright_, plane_angle_threshold_to_normal_, plane_max_width_deviation_, plane_max_height_deviation_, plane_distance_threshold_;
 int min_num_points_per_ring_, min_num_rings_;
 double cluster_size_;
 int clouds_proc_ = 0, clouds_used_ = 0;
@@ -258,8 +258,7 @@ void callback(const PointCloud2::ConstPtr& laser_cloud)
     if (DEBUG)
         ROS_INFO("[Laser] Processing cloud...");
 
-    pcl::PointCloud<Velodyne::Point>::Ptr velocloud(new pcl::PointCloud<Velodyne::Point>),
-        velo_filtered(new pcl::PointCloud<Velodyne::Point>), pattern_cloud(new pcl::PointCloud<Velodyne::Point>);
+    pcl::PointCloud<Velodyne::Point>::Ptr velocloud(new pcl::PointCloud<Velodyne::Point>),pattern_cloud(new pcl::PointCloud<Velodyne::Point>);
 
     clouds_proc_++;
 
@@ -267,29 +266,16 @@ void callback(const PointCloud2::ConstPtr& laser_cloud)
 
     Velodyne::addRange(*velocloud); // For latter computation of edge detection
 
-    pcl::PointCloud<Velodyne::Point>::Ptr radius(new pcl::PointCloud<Velodyne::Point>);
-    pcl::PassThrough<Velodyne::Point> pass2;
-    pass2.setInputCloud(velocloud);
-    pass2.setFilterFieldName("range");
-    pass2.setFilterLimits(passthrough_radius_min_, passthrough_radius_max_);
-    pass2.filter(*velo_filtered);
-
-    sensor_msgs::PointCloud2 range_ros;
-    pcl::toROSMsg(*velo_filtered, range_ros);
-    range_ros.header = laser_cloud->header;
-    range_pub.publish(range_ros);
-
     // Plane segmentation
     pcl::ModelCoefficients::Ptr coefficients(new pcl::ModelCoefficients);
     pcl::PointIndices::Ptr inliers(new pcl::PointIndices);
 
     pcl::SACSegmentation<Velodyne::Point> plane_segmentation;
     plane_segmentation.setModelType(pcl::SACMODEL_PARALLEL_PLANE);
-    plane_segmentation.setDistanceThreshold(0.1);
+    plane_segmentation.setDistanceThreshold(plane_distance_threshold_);
     plane_segmentation.setMethodType(pcl::SAC_RANSAC);
-    plane_segmentation.setAxis(
-        Eigen::Vector3f(plane_parallel_axis_[0], plane_parallel_axis_[1], plane_parallel_axis_[2]));
-    plane_segmentation.setEpsAngle(plane_angle_threshold_to_parallel_);
+    plane_segmentation.setAxis(Eigen::Vector3f(0,0,1)); // Upright sensor and board required
+    plane_segmentation.setEpsAngle(plane_max_angle_to_upright_);
     plane_segmentation.setOptimizeCoefficients(true);
     plane_segmentation.setMaxIterations(1000);
 
@@ -300,9 +286,9 @@ void callback(const PointCloud2::ConstPtr& laser_cloud)
 
     pcl::PointCloud<Velodyne::Point>::Ptr tmp_cloud(new pcl::PointCloud<Velodyne::Point>);
 
-    while (velo_filtered->size() > min_num_points_per_ring_ * min_num_rings_)
+    while (velocloud->size() > min_num_points_per_ring_ * min_num_rings_)
     {
-        plane_segmentation.setInputCloud(velo_filtered);
+        plane_segmentation.setInputCloud(velocloud);
         plane_segmentation.segment(*inliers, *coefficients);
 
         valid = true;
@@ -317,7 +303,7 @@ void callback(const PointCloud2::ConstPtr& laser_cloud)
             ROS_INFO_STREAM("[Laser] Segmented plane with " << inliers->indices.size() << " inliers.");
 
         // Get inliers
-        plane_extract.setInputCloud(velo_filtered);
+        plane_extract.setInputCloud(velocloud);
         plane_extract.setIndices(inliers);
         plane_extract.setNegative(false);
         plane_extract.filter(*tmp_cloud);
@@ -325,15 +311,23 @@ void callback(const PointCloud2::ConstPtr& laser_cloud)
         // Get rings with correct width
         vector<vector<Velodyne::Point*>> rings = Velodyne::getRings(*tmp_cloud, rings_count_);
         int num_rings = 0;
+        double min_z = numeric_limits<double>::max();
+        double max_z = numeric_limits<double>::min();
         for (vector<vector<Velodyne::Point*>>::iterator ring = rings.begin(); ring < rings.end(); ++ring)
         {
             if (ring->size() < min_num_points_per_ring_)
                 continue;
 
-            if (fabs(pcl::euclideanDistance(*(*(ring->begin())), *(*(ring->end() - 1))) - board_width_) > 0.5)
+            if (fabs(pcl::euclideanDistance(*(*(ring->begin())), *(*(ring->end() - 1))) - board_width_) > plane_max_width_deviation_)
                 continue;
 
-            for (vector<Velodyne::Point*>::iterator pt = ring->begin() + 1; pt < ring->end() - 1; pt++)
+            if((*(ring->begin()))->z < min_z)
+                min_z = (*(ring->begin()))->z;
+
+            if((*(ring->begin()))->z > max_z)
+                max_z = (*(ring->begin()))->z;
+
+            for (vector<Velodyne::Point*>::iterator pt = ring->begin(); pt < ring->end() - 1; pt++)
             {
                 plane_cloud->push_back(*(*pt));
             }
@@ -348,6 +342,13 @@ void callback(const PointCloud2::ConstPtr& laser_cloud)
         {
             if (DEBUG)
                 ROS_WARN_STREAM("[Laser] Too few rings.");
+            valid = false;
+        }
+
+        // Check height
+        if(fabs((max_z - min_z) - board_height_) > plane_max_height_deviation_) {
+            if (DEBUG)
+              ROS_WARN_STREAM("[Laser] Height does not fit.");
             valid = false;
         }
 
@@ -372,11 +373,11 @@ void callback(const PointCloud2::ConstPtr& laser_cloud)
             plane_cloud->clear();
 
             // Remove inliers
-            plane_extract.setInputCloud(velo_filtered);
+            plane_extract.setInputCloud(velocloud);
             plane_extract.setIndices(inliers);
             plane_extract.setNegative(true);
             plane_extract.filter(*tmp_cloud);
-            velo_filtered->swap(*tmp_cloud);
+            velocloud->swap(*tmp_cloud);
         }
     }
 
@@ -692,19 +693,10 @@ void callback(const PointCloud2::ConstPtr& laser_cloud)
 
 void param_callback(velo2cam_calibration::LaserConfig& config, uint32_t level)
 {
-    passthrough_radius_min_ = config.passthrough_radius_min;
-    ROS_INFO("New passthrough_radius_min_ threshold: %f", passthrough_radius_min_);
-    passthrough_radius_max_ = config.passthrough_radius_max;
-    ROS_INFO("New passthrough_radius_max_ threshold: %f", passthrough_radius_max_);
     circle_radius_ = config.circle_radius;
     ROS_INFO("New pattern circle radius: %f", circle_radius_);
-    plane_parallel_axis_[0] = config.parallel_axis_x;
-    plane_parallel_axis_[1] = config.parallel_axis_y;
-    plane_parallel_axis_[2] = config.parallel_axis_z;
-    ROS_INFO("New parallel axis for plane segmentation: %f, %f, %f",
-             plane_parallel_axis_[0],
-             plane_parallel_axis_[1],
-             plane_parallel_axis_[2]);
+    plane_distance_threshold_ = config.plane_distance_threshold;
+    ROS_INFO("New plane distance threshold: %f", plane_distance_threshold_);
     plane_normal_axis_[0] = config.normal_x;
     plane_normal_axis_[1] = config.normal_y;
     plane_normal_axis_[2] = config.normal_z;
@@ -712,10 +704,15 @@ void param_callback(velo2cam_calibration::LaserConfig& config, uint32_t level)
              plane_normal_axis_[0],
              plane_normal_axis_[1],
              plane_normal_axis_[2]);
-    plane_angle_threshold_to_parallel_ = config.angle_threshold_to_parallel;
-    ROS_INFO("New angle threshold to parallel: %f", plane_angle_threshold_to_parallel_);
-    plane_angle_threshold_to_normal_ = config.angle_threshold_to_normal;
+    plane_max_angle_to_upright_ = (config.max_angle_to_upright * M_PI) / 180.0;
+    ROS_INFO("New angle threshold to parallel: %f",
+             plane_max_angle_to_upright_);
+    plane_angle_threshold_to_normal_ = (config.max_angle_to_normal * M_PI) / 180.0;
     ROS_INFO("New angle threshold to normal: %f", plane_angle_threshold_to_normal_);
+    plane_max_width_deviation_ = config.max_width_deviation;
+    ROS_INFO("New maximal width deviation: %f", plane_max_width_deviation_);
+    plane_max_height_deviation_ = config.max_height_deviation;
+    ROS_INFO("New maximal height deviation: %f", plane_max_height_deviation_);
     min_num_points_per_ring_ = config.min_num_points_per_ring;
     ROS_INFO("New minimum number of points per ring: %f", min_num_points_per_ring_);
     min_num_rings_ = config.min_num_rings;
@@ -743,7 +740,6 @@ int main(int argc, char** argv)
     ros::Subscriber sub = nh_.subscribe("cloud1", 1, callback);
     pcl::console::setVerbosityLevel(pcl::console::L_ALWAYS);
 
-    range_pub = nh_.advertise<PointCloud2>("range_filtered_velo", 1);
     plane_cloud_pub = nh_.advertise<PointCloud2>("plane_cloud", 1);
     pattern_pub = nh_.advertise<PointCloud2>("pattern_circles", 1);
     auxpoint_pub = nh_.advertise<PointCloud2>("rotated_pattern", 1);
@@ -763,6 +759,7 @@ int main(int argc, char** argv)
     nh_.param("circles_diagonal", circles_diagonal_, 0.4242);
     circles_perimeter_ = 2 * circles_horizontal_distance_ + 2 * circles_vertical_distance_;
     nh_.param("board_width", board_width_, 1.2);
+    nh_.param("board_height", board_height_, 0.8);
 
     nFrames = 0;
     cumulative_cloud = pcl::PointCloud<pcl::PointXYZ>::Ptr(new pcl::PointCloud<pcl::PointXYZ>);
