@@ -630,19 +630,46 @@ void callback(const PointCloud2::ConstPtr& laser_cloud)
         std::vector<pcl::PointXYZ> selected_centers;
         for (int j = 0; j < groups[best_candidate_idx].size(); ++j)
         {
-            selected_centers.push_back(centroid_candidates->at(groups[best_candidate_idx][j]));
-
             pcl::PointXYZ center_rotated_back =
                 pcl::transformPoint(centroid_candidates->at(groups[best_candidate_idx][j]), rotation.inverse());
             center_rotated_back.x = (-coefficients->values[1] * center_rotated_back.y -
                                      coefficients->values[2] * center_rotated_back.z - coefficients->values[3]) /
                                     coefficients->values[0];
-            cumulative_cloud->push_back(center_rotated_back); // Build selected centers set TODO WARNING! This replaces
-                                                              // center selection algorithm!!
+            selected_centers.push_back(center_rotated_back);
+        }
+
+        // Check if selected centers are near cumulative cloud, reset otherwise
+        pcl::CentroidPoint<pcl::PointXYZ> centroid_selected_centers;
+        for (const pcl::PointXYZ& p : selected_centers) {
+            centroid_selected_centers.add(p);
+        }
+        pcl::PointXYZ centroid_point_selected_centers;
+        centroid_selected_centers.get(centroid_point_selected_centers);
+
+        pcl::CentroidPoint<pcl::PointXYZ> centroid_cumulative_cloud;
+        for (const pcl::PointXYZ& p : cumulative_cloud->points) {
+            centroid_cumulative_cloud.add(p);
+        }
+        pcl::PointXYZ centroid_point_cumulative_cloud;
+        centroid_cumulative_cloud.get(centroid_point_cumulative_cloud);
+
+        if(pcl::euclideanDistance(centroid_point_selected_centers,centroid_point_cumulative_cloud) > 0.5) {
+            nFrames = 0;
+            cumulative_cloud->clear();
+            ROS_WARN("Reset cumulative cloud cloud");
+        }
+
+        // Add selected centers to cumulative cloud
+        for (const pcl::PointXYZ& selected_center : selected_centers) {
+            cumulative_cloud->push_back(selected_center);
         }
 
         nFrames++;
         clouds_used_ = nFrames;
+
+        if(nFrames < 2) {
+            return;
+        }
     }
 
     sensor_msgs::PointCloud2 ros_pointcloud;
