@@ -66,7 +66,8 @@
 using namespace std;
 using namespace sensor_msgs;
 
-double circles_horizontal_distance_, circles_vertical_distance_, circles_diagonal_, circles_perimeter_, board_width_, board_height_;
+double circles_horizontal_distance_, circles_vertical_distance_, circles_diagonal_, circles_perimeter_, board_width_,
+    board_height_;
 
 class Square
 {
@@ -147,8 +148,8 @@ class Square
         }
 
         if (DEBUG)
-            ROS_INFO_STREAM("[Laser] top_left: " << _top_left << ", top_right: " << _top_right << ", bot_left: " << _bot_left
-                                         << ", bot_right: " << _bot_right);
+            ROS_INFO_STREAM("[Laser] top_left: " << _top_left << ", top_right: " << _top_right
+                                                 << ", bot_left: " << _bot_left << ", bot_right: " << _bot_right);
 
         // Check perimeter?
         if (fabs(perimeter() - circles_perimeter_) > 0.5)
@@ -236,8 +237,8 @@ void comb(int N, int K, std::vector<std::vector<int>>& groups)
     assert(groups.size() == n_permutations);
 }
 
-ros::Publisher pcl_plane_cloud_pub, segmented_plane_cloud_pub, cumulative_pub, center_pc_pub, centers_pub, pattern_pub, coeff_pub, aux_pub,
-    auxpoint_pub, debug_pub;
+ros::Publisher pcl_plane_cloud_pub, segmented_plane_cloud_pub, cumulative_pub, center_pc_pub, centers_pub, pattern_pub,
+    coeff_pub, aux_pub, auxpoint_pub, debug_pub;
 int nFrames; // Used for resetting center computation
 pcl::PointCloud<pcl::PointXYZ>::Ptr cumulative_cloud;
 
@@ -246,7 +247,8 @@ double edge_threshold_, max_plane_distance_;
 double circle_radius_;
 int rings_count_;
 Eigen::Vector3f plane_normal_axis_;
-double plane_max_angle_to_upright_, plane_angle_threshold_to_normal_, plane_max_width_deviation_, plane_max_height_deviation_, plane_distance_threshold_;
+double plane_max_angle_to_upright_, plane_angle_threshold_to_normal_, plane_max_width_deviation_,
+    plane_max_height_deviation_, plane_distance_threshold_;
 int min_num_points_per_ring_, min_num_rings_;
 double cluster_size_;
 int clouds_proc_ = 0, clouds_used_ = 0;
@@ -258,7 +260,8 @@ void callback(const PointCloud2::ConstPtr& laser_cloud)
     if (DEBUG)
         ROS_INFO("[Laser] Processing cloud...");
 
-    pcl::PointCloud<Velodyne::Point>::Ptr velocloud(new pcl::PointCloud<Velodyne::Point>),pattern_cloud(new pcl::PointCloud<Velodyne::Point>);
+    pcl::PointCloud<Velodyne::Point>::Ptr velocloud(new pcl::PointCloud<Velodyne::Point>),
+        pattern_cloud(new pcl::PointCloud<Velodyne::Point>);
 
     clouds_proc_++;
 
@@ -274,7 +277,7 @@ void callback(const PointCloud2::ConstPtr& laser_cloud)
     plane_segmentation.setModelType(pcl::SACMODEL_PARALLEL_PLANE);
     plane_segmentation.setDistanceThreshold(plane_distance_threshold_);
     plane_segmentation.setMethodType(pcl::SAC_RANSAC);
-    plane_segmentation.setAxis(Eigen::Vector3f(0,0,1)); // Upright sensor and board required
+    plane_segmentation.setAxis(Eigen::Vector3f(0, 0, 1)); // Upright sensor and board required
     plane_segmentation.setEpsAngle(plane_max_angle_to_upright_);
     plane_segmentation.setOptimizeCoefficients(true);
     plane_segmentation.setMaxIterations(1000);
@@ -318,13 +321,14 @@ void callback(const PointCloud2::ConstPtr& laser_cloud)
             if (ring->size() < min_num_points_per_ring_)
                 continue;
 
-            if (fabs(pcl::euclideanDistance(*(*(ring->begin())), *(*(ring->end() - 1))) - board_width_) > plane_max_width_deviation_)
+            if (fabs(pcl::euclideanDistance(*(*(ring->begin())), *(*(ring->end() - 1))) - board_width_) >
+                plane_max_width_deviation_)
                 continue;
 
-            if((*(ring->begin()))->z < min_z)
+            if ((*(ring->begin()))->z < min_z)
                 min_z = (*(ring->begin()))->z;
 
-            if((*(ring->begin()))->z > max_z)
+            if ((*(ring->begin()))->z > max_z)
                 max_z = (*(ring->begin()))->z;
 
             for (vector<Velodyne::Point*>::iterator pt = ring->begin(); pt < ring->end() - 1; pt++)
@@ -346,9 +350,10 @@ void callback(const PointCloud2::ConstPtr& laser_cloud)
         }
 
         // Check height
-        if(fabs((max_z - min_z) - board_height_) > plane_max_height_deviation_) {
+        if (fabs((max_z - min_z) - board_height_) > plane_max_height_deviation_)
+        {
             if (DEBUG)
-              ROS_WARN_STREAM("[Laser] Height does not fit.");
+                ROS_WARN_STREAM("[Laser] Height does not fit.");
             valid = false;
         }
 
@@ -415,12 +420,13 @@ void callback(const PointCloud2::ConstPtr& laser_cloud)
         {
             Velodyne::Point* prev = *(pt - 1);
             Velodyne::Point* succ = *(pt + 1);
-            (*pt)->intensity = max(pcl::euclideanDistance(*prev,*(*pt)),pcl::euclideanDistance(*(*pt),*succ));
+            (*pt)->intensity = max(pcl::euclideanDistance(*prev, *(*pt)), pcl::euclideanDistance(*(*pt), *succ));
         }
     }
 
     pcl::PointCloud<Velodyne::Point>::Ptr edges_cloud(new pcl::PointCloud<Velodyne::Point>);
-    for (pcl::PointCloud<Velodyne::Point>::iterator pt = plane_cloud->points.begin(); pt < plane_cloud->points.end(); ++pt)
+    for (pcl::PointCloud<Velodyne::Point>::iterator pt = plane_cloud->points.begin(); pt < plane_cloud->points.end();
+         ++pt)
     {
         if (pt->intensity > edge_threshold_)
         {
@@ -510,8 +516,8 @@ void callback(const PointCloud2::ConstPtr& laser_cloud)
 
     pcl::PointCloud<pcl::PointXYZ>::Ptr copy_cloud(new pcl::PointCloud<pcl::PointXYZ>); // Used for removing inliers
     pcl::copyPointCloud<pcl::PointXYZ>(*xy_cloud, *copy_cloud);
-    pcl::PointCloud<pcl::PointXYZ>::Ptr circle_cloud(new pcl::PointCloud<pcl::PointXYZ>);   // To store circle points
-    pcl::PointCloud<pcl::PointXYZ>::Ptr cloud_f(new pcl::PointCloud<pcl::PointXYZ>);        // Temp pc used for swaping
+    pcl::PointCloud<pcl::PointXYZ>::Ptr circle_cloud(new pcl::PointCloud<pcl::PointXYZ>); // To store circle points
+    pcl::PointCloud<pcl::PointXYZ>::Ptr cloud_f(new pcl::PointCloud<pcl::PointXYZ>);      // Temp pc used for swaping
 
     // Force pattern points to belong to computed plane
     for (pcl::PointCloud<pcl::PointXYZ>::iterator pt = copy_cloud->points.begin(); pt < copy_cloud->points.end(); ++pt)
@@ -642,34 +648,39 @@ void callback(const PointCloud2::ConstPtr& laser_cloud)
 
         // Check if selected centers are near cumulative cloud, reset otherwise
         pcl::CentroidPoint<pcl::PointXYZ> centroid_selected_centers;
-        for (const pcl::PointXYZ& p : selected_centers) {
+        for (const pcl::PointXYZ& p : selected_centers)
+        {
             centroid_selected_centers.add(p);
         }
         pcl::PointXYZ centroid_point_selected_centers;
         centroid_selected_centers.get(centroid_point_selected_centers);
 
         pcl::CentroidPoint<pcl::PointXYZ> centroid_cumulative_cloud;
-        for (const pcl::PointXYZ& p : cumulative_cloud->points) {
+        for (const pcl::PointXYZ& p : cumulative_cloud->points)
+        {
             centroid_cumulative_cloud.add(p);
         }
         pcl::PointXYZ centroid_point_cumulative_cloud;
         centroid_cumulative_cloud.get(centroid_point_cumulative_cloud);
 
-        if(pcl::euclideanDistance(centroid_point_selected_centers,centroid_point_cumulative_cloud) > 0.5) {
+        if (pcl::euclideanDistance(centroid_point_selected_centers, centroid_point_cumulative_cloud) > 0.5)
+        {
             nFrames = 0;
             cumulative_cloud->clear();
             ROS_WARN("Reset cumulative cloud cloud");
         }
 
         // Add selected centers to cumulative cloud
-        for (const pcl::PointXYZ& selected_center : selected_centers) {
+        for (const pcl::PointXYZ& selected_center : selected_centers)
+        {
             cumulative_cloud->push_back(selected_center);
         }
 
         nFrames++;
         clouds_used_ = nFrames;
 
-        if(nFrames < 2) {
+        if (nFrames < 2)
+        {
             return;
         }
     }
@@ -734,8 +745,7 @@ void param_callback(velo2cam_calibration::LaserConfig& config, uint32_t level)
              plane_normal_axis_[1],
              plane_normal_axis_[2]);
     plane_max_angle_to_upright_ = (config.max_angle_to_upright * M_PI) / 180.0;
-    ROS_INFO("New angle threshold to parallel: %f",
-             plane_max_angle_to_upright_);
+    ROS_INFO("New angle threshold to parallel: %f", plane_max_angle_to_upright_);
     plane_angle_threshold_to_normal_ = (config.max_angle_to_normal * M_PI) / 180.0;
     ROS_INFO("New angle threshold to normal: %f", plane_angle_threshold_to_normal_);
     plane_max_width_deviation_ = config.max_width_deviation;
