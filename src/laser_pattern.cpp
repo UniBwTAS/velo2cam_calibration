@@ -237,8 +237,8 @@ void comb(int N, int K, std::vector<std::vector<int>>& groups)
     assert(groups.size() == n_permutations);
 }
 
-ros::Publisher pcl_plane_cloud_pub, segmented_plane_cloud_pub, cumulative_pub, center_pc_pub, centers_pub, pattern_pub,
-    coeff_pub, aux_pub, auxpoint_pub, debug_pub;
+ros::Publisher pcl_plane_cloud_pub, plane_cluster_cloud_pub, segmented_plane_cloud_pub, cumulative_pub, center_pc_pub,
+    centers_pub, pattern_pub, coeff_pub, aux_pub, auxpoint_pub, debug_pub;
 int nFrames; // Used for resetting center computation
 pcl::PointCloud<pcl::PointXYZ>::Ptr cumulative_cloud;
 
@@ -284,104 +284,149 @@ void callback(const PointCloud2::ConstPtr& laser_cloud)
 
     pcl::ExtractIndices<Velodyne::Point> plane_extract;
 
+    pcl::PointCloud<Velodyne::Point>::Ptr segmented_cloud(new pcl::PointCloud<Velodyne::Point>);
     pcl::PointCloud<Velodyne::Point>::Ptr plane_cloud(new pcl::PointCloud<Velodyne::Point>);
-    bool valid = false;
-
     pcl::PointCloud<Velodyne::Point>::Ptr tmp_cloud(new pcl::PointCloud<Velodyne::Point>);
+    pcl::PointCloud<Velodyne::Point>::Ptr cluster_cloud(new pcl::PointCloud<Velodyne::Point>);
+
+    bool valid = false;
 
     while (velocloud->size() > min_num_points_per_ring_ * min_num_rings_)
     {
         plane_segmentation.setInputCloud(velocloud);
         plane_segmentation.segment(*inliers, *coefficients);
 
-        valid = true;
-
         if (inliers->indices.size() < min_num_points_per_ring_ * min_num_rings_)
         {
-            valid = false;
             break;
         }
-
-        if (DEBUG)
-            ROS_INFO_STREAM("[Laser] Segmented plane with " << inliers->indices.size() << " inliers.");
 
         // Get inliers
         plane_extract.setInputCloud(velocloud);
         plane_extract.setIndices(inliers);
         plane_extract.setNegative(false);
-        plane_extract.filter(*tmp_cloud);
+        plane_extract.filter(*plane_cloud);
 
-        // Get rings with correct width
-        vector<vector<Velodyne::Point*>> rings = Velodyne::getRings(*tmp_cloud, rings_count_);
-        int num_rings = 0;
-        double min_z = numeric_limits<double>::max();
-        double max_z = numeric_limits<double>::min();
-        for (vector<vector<Velodyne::Point*>>::iterator ring = rings.begin(); ring < rings.end(); ++ring)
+        // Extract clusters
+        pcl::search::KdTree<Velodyne::Point>::Ptr tree(new pcl::search::KdTree<Velodyne::Point>);
+        tree->setInputCloud(plane_cloud);
+
+        std::vector<pcl::PointIndices> cluster_indices;
+        pcl::EuclideanClusterExtraction<Velodyne::Point> ec;
+        ec.setClusterTolerance(0.1);
+        ec.setMinClusterSize(min_num_points_per_ring_ * min_num_rings_);
+        ec.setMaxClusterSize(25000);
+        ec.setSearchMethod(tree);
+        ec.setInputCloud(plane_cloud);
+        ec.extract(cluster_indices);
+
+        for (std::vector<pcl::PointIndices>::const_iterator it = cluster_indices.begin(); it != cluster_indices.end();
+             ++it)
         {
-            if (ring->size() < min_num_points_per_ring_)
-                continue;
+            for (const auto& index : it->indices)
+                cluster_cloud->push_back((*plane_cloud)[index]);
 
-            if (fabs(pcl::euclideanDistance(*(*(ring->begin())), *(*(ring->end() - 1))) - board_width_) >
-                plane_max_width_deviation_)
-                continue;
+            valid = true;
 
-            if ((*(ring->begin()))->z < min_z)
-                min_z = (*(ring->begin()))->z;
-
-            if ((*(ring->begin()))->z > max_z)
-                max_z = (*(ring->begin()))->z;
-
-            for (vector<Velodyne::Point*>::iterator pt = ring->begin(); pt < ring->end() - 1; pt++)
+            // Get rings with correct width
+            vector<vector<Velodyne::Point*>> rings = Velodyne::getRings(*cluster_cloud, rings_count_);
+            int num_rings = 0;
+            double min_z = numeric_limits<double>::max();
+            double max_z = numeric_limits<double>::min();
+            for (vector<vector<Velodyne::Point*>>::iterator ring = rings.begin(); ring < rings.end(); ++ring)
             {
-                plane_cloud->push_back(*(*pt));
+                if (ring->size() < min_num_points_per_ring_)
+                    continue;
+
+                if (fabs(pcl::euclideanDistance(*(*(ring->begin())), *(*(ring->end() - 1))) - board_width_) >
+                    plane_max_width_deviation_)
+                    continue;
+
+                if ((*(ring->begin()))->z < min_z)
+                    min_z = (*(ring->begin()))->z;
+
+                if ((*(ring->begin()))->z > max_z)
+                    max_z = (*(ring->begin()))->z;
+
+                for (vector<Velodyne::Point*>::iterator pt = ring->begin(); pt < ring->end() - 1; pt++)
+                {
+                    segmented_cloud->push_back(*(*pt));
+                }
+
+                num_rings++;
             }
 
-            num_rings++;
-        }
+            // Check number of rings
+            if (num_rings < min_num_rings_)
+            {
+                if (DEBUG)
+                    ROS_WARN_STREAM("[Laser] Too few rings: " << num_rings);
+                valid = false;
+            }
 
-        // Check number of rings
-        if (DEBUG)
-            ROS_INFO_STREAM("[Laser] Plane consists of " << num_rings << " rings.");
-        if (num_rings < min_num_rings_)
-        {
-            if (DEBUG)
-                ROS_WARN_STREAM("[Laser] Too few rings.");
-            valid = false;
-        }
+            // Check height
+            if (valid)
+            {
+                const double height = fabs((max_z - min_z) - board_height_);
+                if (height > plane_max_height_deviation_)
+                {
+                    if (DEBUG)
+                        ROS_WARN_STREAM("[Laser] Height does not fit: " << height);
+                    valid = false;
+                }
+            }
 
-        // Check height
-        if (fabs((max_z - min_z) - board_height_) > plane_max_height_deviation_)
-        {
-            if (DEBUG)
-                ROS_WARN_STREAM("[Laser] Height does not fit.");
-            valid = false;
-        }
+            // Check normal angle
+            if (valid)
+            {
+                Eigen::Vector3f plane_normal(coefficients->values[0], coefficients->values[1], coefficients->values[2]);
+                double angle =
+                    std::atan2(plane_normal.cross(plane_normal_axis_).norm(), plane_normal.dot(plane_normal_axis_));
+                if (angle > plane_angle_threshold_to_normal_)
+                {
+                    if (DEBUG)
+                        ROS_WARN_STREAM("[Laser] Angle to normal does not fit: " << angle);
+                    valid = false;
+                }
+            }
 
-        // Check normal angle
-        Eigen::Vector3f plane_normal(coefficients->values[0], coefficients->values[1], coefficients->values[2]);
-        double angle = std::atan2(plane_normal.cross(plane_normal_axis_).norm(), plane_normal.dot(plane_normal_axis_));
-        if (DEBUG)
-            ROS_INFO_STREAM("[Laser] Angle difference between plane normal and desired normal: " << angle);
-        if (angle > plane_angle_threshold_to_normal_)
-        {
-            if (DEBUG)
-                ROS_WARN_STREAM("[Laser] Angle does not fit.");
-            valid = false;
+            if (valid)
+            {
+                if (DEBUG)
+                    ROS_WARN_STREAM("[Laser] Found valid plane.");
+
+                sensor_msgs::PointCloud2 pcl_plane_cloud_ros;
+                pcl::toROSMsg(*plane_cloud, pcl_plane_cloud_ros);
+                pcl_plane_cloud_ros.header = laser_cloud->header;
+                pcl_plane_cloud_pub.publish(pcl_plane_cloud_ros);
+
+                sensor_msgs::PointCloud2 plane_cluster_cloud_ros;
+                pcl::toROSMsg(*cluster_cloud, plane_cluster_cloud_ros);
+                plane_cluster_cloud_ros.header = laser_cloud->header;
+                plane_cluster_cloud_pub.publish(plane_cluster_cloud_ros);
+
+                break;
+            }
+            else
+            {
+                cluster_cloud->clear();
+                segmented_cloud->clear();
+
+                if (DEBUG)
+                    ROS_WARN_STREAM("[Laser] Cluster invalid.");
+            }
         }
 
         if (valid)
         {
-            sensor_msgs::PointCloud2 pcl_plane_cloud_ros;
-            pcl::toROSMsg(*tmp_cloud, pcl_plane_cloud_ros);
-            pcl_plane_cloud_ros.header = laser_cloud->header;
-            pcl_plane_cloud_pub.publish(pcl_plane_cloud_ros);
             break;
         }
         else
         {
-            plane_cloud->clear();
+            if (DEBUG)
+                ROS_WARN_STREAM("[Laser] Plane invalid.");
 
-            // Remove inliers
+            // Remove cluster
             plane_extract.setNegative(true);
             plane_extract.filter(*tmp_cloud);
             velocloud->swap(*tmp_cloud);
@@ -395,7 +440,7 @@ void callback(const PointCloud2::ConstPtr& laser_cloud)
     }
 
     sensor_msgs::PointCloud2 segmented_plane_cloud_ros;
-    pcl::toROSMsg(*plane_cloud, segmented_plane_cloud_ros);
+    pcl::toROSMsg(*segmented_cloud, segmented_plane_cloud_ros);
     segmented_plane_cloud_ros.header = laser_cloud->header;
     segmented_plane_cloud_pub.publish(segmented_plane_cloud_ros);
 
@@ -407,7 +452,7 @@ void callback(const PointCloud2::ConstPtr& laser_cloud)
     coefficients_v(3) = coefficients->values[3];
 
     // Get edges points by range
-    vector<vector<Velodyne::Point*>> rings = Velodyne::getRings(*plane_cloud, rings_count_);
+    vector<vector<Velodyne::Point*>> rings = Velodyne::getRings(*segmented_cloud, rings_count_);
     for (vector<vector<Velodyne::Point*>>::iterator ring = rings.begin(); ring < rings.end(); ++ring)
     {
         Velodyne::Point *prev, *succ;
@@ -425,7 +470,8 @@ void callback(const PointCloud2::ConstPtr& laser_cloud)
     }
 
     pcl::PointCloud<Velodyne::Point>::Ptr edges_cloud(new pcl::PointCloud<Velodyne::Point>);
-    for (pcl::PointCloud<Velodyne::Point>::iterator pt = plane_cloud->points.begin(); pt < plane_cloud->points.end();
+    for (pcl::PointCloud<Velodyne::Point>::iterator pt = segmented_cloud->points.begin();
+         pt < segmented_cloud->points.end();
          ++pt)
     {
         if (pt->intensity > edge_threshold_)
@@ -780,6 +826,7 @@ int main(int argc, char** argv)
     pcl::console::setVerbosityLevel(pcl::console::L_ALWAYS);
 
     pcl_plane_cloud_pub = nh_.advertise<PointCloud2>("pcl_plane_cloud", 1);
+    plane_cluster_cloud_pub = nh_.advertise<PointCloud2>("plane_cluster_cloud", 1);
     segmented_plane_cloud_pub = nh_.advertise<PointCloud2>("segmented_plane_cloud", 1);
     pattern_pub = nh_.advertise<PointCloud2>("pattern_circles", 1);
     auxpoint_pub = nh_.advertise<PointCloud2>("rotated_pattern", 1);
