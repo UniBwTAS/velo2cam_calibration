@@ -236,7 +236,7 @@ void comb(int N, int K, std::vector<std::vector<int>>& groups)
     assert(groups.size() == n_permutations);
 }
 
-ros::Publisher plane_cloud_pub, cumulative_pub, center_pc_pub, centers_pub, pattern_pub, coeff_pub, aux_pub,
+ros::Publisher pcl_plane_cloud_pub, segmented_plane_cloud_pub, cumulative_pub, center_pc_pub, centers_pub, pattern_pub, coeff_pub, aux_pub,
     auxpoint_pub, debug_pub;
 int nFrames; // Used for resetting center computation
 pcl::PointCloud<pcl::PointXYZ>::Ptr cumulative_cloud;
@@ -366,6 +366,10 @@ void callback(const PointCloud2::ConstPtr& laser_cloud)
 
         if (valid)
         {
+            sensor_msgs::PointCloud2 pcl_plane_cloud_ros;
+            pcl::toROSMsg(*tmp_cloud, pcl_plane_cloud_ros);
+            pcl_plane_cloud_ros.header = laser_cloud->header;
+            pcl_plane_cloud_pub.publish(pcl_plane_cloud_ros);
             break;
         }
         else
@@ -373,8 +377,6 @@ void callback(const PointCloud2::ConstPtr& laser_cloud)
             plane_cloud->clear();
 
             // Remove inliers
-            plane_extract.setInputCloud(velocloud);
-            plane_extract.setIndices(inliers);
             plane_extract.setNegative(true);
             plane_extract.filter(*tmp_cloud);
             velocloud->swap(*tmp_cloud);
@@ -387,10 +389,10 @@ void callback(const PointCloud2::ConstPtr& laser_cloud)
         return;
     }
 
-    sensor_msgs::PointCloud2 plane_cloud_ros;
-    pcl::toROSMsg(*plane_cloud, plane_cloud_ros);
-    plane_cloud_ros.header = laser_cloud->header;
-    plane_cloud_pub.publish(plane_cloud_ros);
+    sensor_msgs::PointCloud2 segmented_plane_cloud_ros;
+    pcl::toROSMsg(*plane_cloud, segmented_plane_cloud_ros);
+    segmented_plane_cloud_ros.header = laser_cloud->header;
+    segmented_plane_cloud_pub.publish(segmented_plane_cloud_ros);
 
     // Copy coefficients to proper object for further filtering
     Eigen::VectorXf coefficients_v(4);
@@ -767,7 +769,8 @@ int main(int argc, char** argv)
     ros::Subscriber sub = nh_.subscribe("cloud1", 1, callback);
     pcl::console::setVerbosityLevel(pcl::console::L_ALWAYS);
 
-    plane_cloud_pub = nh_.advertise<PointCloud2>("plane_cloud", 1);
+    pcl_plane_cloud_pub = nh_.advertise<PointCloud2>("pcl_plane_cloud", 1);
+    segmented_plane_cloud_pub = nh_.advertise<PointCloud2>("segmented_plane_cloud", 1);
     pattern_pub = nh_.advertise<PointCloud2>("pattern_circles", 1);
     auxpoint_pub = nh_.advertise<PointCloud2>("rotated_pattern", 1);
     cumulative_pub = nh_.advertise<PointCloud2>("cumulative_cloud", 1);
